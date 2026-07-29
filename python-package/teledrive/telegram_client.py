@@ -50,6 +50,18 @@ class TelegramService:
         sent = await self.client.send_code_request(phone)
         return sent.phone_code_hash
 
+    async def sign_in_code(self, phone: str, code: str, phone_code_hash: str):
+        """Sign in reusing the EXACT phone_code_hash from send_code_request."""
+        assert self.client
+        return await self.client.sign_in(
+            phone=phone, code=code, phone_code_hash=phone_code_hash
+        )
+
+    async def sign_in_password(self, password: str):
+        """Second factor on the SAME client; never requests a new code."""
+        assert self.client
+        return await self.client.sign_in(password=password)
+
     async def complete_login(self, phone: str, code: str, password: Optional[str] = None) -> bool:
         assert self.client
         try:
