@@ -103,6 +103,13 @@ def items_in_states(states: Iterable[str]) -> list[MediaItem]:
         return [_row_to_item(r) for r in rows]
 
 
+def delete_item(item_id: str) -> None:
+    """Delete a queue ROW. Never touches a file already uploaded to Drive."""
+    with cursor() as c:
+        c.execute("DELETE FROM media_items WHERE id=?", (item_id,))
+        c.execute("DELETE FROM events WHERE item_id=?", (item_id,))
+
+
 def counts_by_state() -> dict[str, int]:
     with cursor() as c:
         rows = c.execute("SELECT state, COUNT(*) FROM media_items GROUP BY state").fetchall()
