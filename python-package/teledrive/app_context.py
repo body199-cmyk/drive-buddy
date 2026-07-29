@@ -19,7 +19,25 @@ from .auth_manager import AuthManager
 from .config import CONFIG, RuntimeConfig
 from .logging_config import get_logger
 from .progress_tracker import ProgressTracker
+from .drive_auth import DriveAuth
+from .drive_folders import DriveFolders
+from .handlers import Handlers
+from .progress_tracker import ProgressTracker  # noqa: F401 (re-export order)
 from .queue_manager import QueueManager
+from .services import (
+    CheckpointService,
+    ColabExportService,
+    DriveQuotaService,
+    LogService,
+    PreferencesService,
+    ScannerService,
+    SelectionService,
+    SettingsService,
+    StatsService,
+)
+from .package_service import PackageService
+from .telegram_auth import TelegramAuth
+from .ui_binder import UIBinder
 
 _log = get_logger("teledrive.context")
 
@@ -51,11 +69,32 @@ class ApplicationContext:
         self.queue_manager: QueueManager = QueueManager()
         self.progress: ProgressTracker = ProgressTracker()
         self.ui_state: UIState = UIState(language=self.config.language)
-        # Attached by later phases; declared here so resolve() fails loudly
-        # instead of silently creating attributes.
-        self.telegram_auth: Any = None
-        self.drive_auth: Any = None
+
+        # Auth owners (Phases 3-4): the ONLY holders of a Telegram client and
+        # a Drive service object.
+        self.telegram_auth = TelegramAuth(self)
+        self.drive_auth = DriveAuth(self)
+
+        # Domain services (Phases 5-7).
+        self.drive_folders = DriveFolders(self)
+        self.drive_quota = DriveQuotaService(self)
+        self.selection = SelectionService(self)
+        self.scanner = ScannerService(self)
+        self.stats = StatsService(self)
+        self.log_service = LogService(self)
+        self.settings = SettingsService(self)
+        self.preferences = PreferencesService(self)
+        self.checkpoints = CheckpointService(self)
+        self.colab_export = ColabExportService(self)
+        self.package_service = PackageService(self)
+
+        # Binding layer (Phase 2).
+        self.handlers = Handlers(self)
+        self.binder = UIBinder(self, self.handlers)
+
+        self.queue_manager.bind_context(self)
         self.transfer_manager: Any = None
+        self.drive_client: Any = None
         self.bootstrap_info: dict = {}
 
     # ---- lifecycle ----

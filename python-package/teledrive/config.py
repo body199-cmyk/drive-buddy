@@ -17,7 +17,7 @@ SESSION_DIR = ROOT / "session"
 DB_PATH = DATA_DIR / "teledrive.db"
 LOG_PATH = LOGS_DIR / "teledrive.log"
 TELEGRAM_SESSION = SESSION_DIR / "telegram.session"
-DRIVE_TOKEN = SESSION_DIR / "drive_token.json"
+# No Drive token file: Colab-native auth only (Constitution Section 6).
 
 DRIVE_APPDATA_FOLDER = "TeleDrive_AppData"
 

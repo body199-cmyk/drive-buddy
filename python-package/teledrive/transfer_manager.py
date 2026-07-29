@@ -33,11 +33,52 @@ class TransferManager:
         self._paused.set()  # not paused
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
+        self._workers: Optional[int] = None
+        self._paused_items: set[str] = set()
+        self._stopped_items: set[str] = set()
 
     def _semaphore(self) -> asyncio.Semaphore:
         if self._sema is None:
-            self._sema = asyncio.Semaphore(CONFIG.concurrency_value())
+            self._sema = asyncio.Semaphore(self.worker_count())
         return self._sema
+
+    def worker_count(self) -> int:
+        from .config import HARD_CONCURRENCY_CAP
+        value = self._workers if self._workers is not None else CONFIG.concurrency_value()
+        return max(1, min(int(value), HARD_CONCURRENCY_CAP))
+
+    def set_workers(self, workers: int) -> int:
+        """Applies to newly started items; running items are never killed."""
+        from .config import HARD_CONCURRENCY_CAP
+        self._workers = max(1, min(int(workers), HARD_CONCURRENCY_CAP))
+        self._sema = None
+        return self._workers
+
+    # ---- per-item control ----
+
+    def pause_item(self, item_id: str) -> None:
+        self._paused_items.add(item_id)
+
+    def resume_item(self, item_id: str) -> None:
+        self._paused_items.discard(item_id)
+
+    def stop_item(self, item_id: str) -> None:
+        self._stopped_items.add(item_id)
+        self._paused_items.discard(item_id)
+
+    def item_paused(self, item_id: str) -> bool:
+        return item_id in self._paused_items
+
+    def item_stopped(self, item_id: str) -> bool:
+        return item_id in self._stopped_items
+
+    async def _wait_item(self, item_id: str) -> bool:
+        """Returns False when the item was stopped."""
+        while self.item_paused(item_id) and not self._stop.is_set():
+            if self.item_stopped(item_id):
+                return False
+            await asyncio.sleep(0.2)
+        return not (self.item_stopped(item_id) or self._stop.is_set())
 
     def pause(self) -> None:
         self._paused.clear()
@@ -59,10 +100,13 @@ class TransferManager:
 
     async def _process(self, item: MediaItem) -> None:
         async with self._semaphore():
-            if self._stop.is_set():
+            if self._stop.is_set() or self.item_stopped(item.id):
                 QUEUE.try_transition(item.id, "Stopped")
                 return
             await self._paused.wait()
+            if not await self._wait_item(item.id):
+                QUEUE.try_transition(item.id, "Stopped")
+                return
             try:
                 await self._do_item(item)
             except Exception as exc:  # last-resort classification
@@ -101,7 +145,7 @@ class TransferManager:
         while True:
             attempt += 1
             await self._paused.wait()
-            if self._stop.is_set():
+            if self._stop.is_set() or not await self._wait_item(item.id):
                 QUEUE.try_transition(item.id, "Stopped")
                 return
             try:

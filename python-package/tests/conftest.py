@@ -19,3 +19,14 @@ def isolated_root(tmp_path, monkeypatch):
     migrations.apply()
     yield root
     database.close()
+
+
+@pytest.fixture()
+def ctx():
+    """The single ApplicationContext, torn down after every test."""
+    from teledrive import app_context
+
+    app_context.reset_context()
+    context = app_context.create_context()
+    yield context
+    app_context.reset_context()

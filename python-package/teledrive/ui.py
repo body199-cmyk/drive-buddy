@@ -1,358 +1,232 @@
-"""Gradio UI. All strings via i18n; zero hardcoded user-facing text."""
+"""Gradio layout only.
+
+This module declares components and asks the UIBinder to attach them. It contains
+no business logic, no lambdas, no ad-hoc event handlers and no hardcoded
+user-facing strings — every label comes from i18n and every behaviour comes from
+a named handler declared in ACTION_SPECS.
+"""
 from __future__ import annotations
 
 from typing import Any
 
-from . import database as db
 from .app_context import ApplicationContext, get_context
-from .checkpoint_manager import reconcile_with_drive, restore_from_drive, apply_snapshot
-from .config import CONFIG, DRIVE_TOKEN
-from .drive_client import DriveService
-from .filters import FilterSet, apply as apply_filters
-from .i18n import t, set_language, toggle
-from .logging_config import get_logger, tail
-from .media_scanner import scan_link
-from .models import MediaItem
-from .telegram_client import TelegramService
-from .telegram_links import parse as parse_link
-from .transfer_manager import TransferManager
-from .utils import human_bytes, human_duration, safe_disk_free
-from .config import TEMP_DIR
-
-_log = get_logger("teledrive.ui")
+from .i18n import t
 
 try:
     import gradio as gr
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover - Colab always has gradio
     gr = None  # type: ignore
 
-def _ctx() -> ApplicationContext:
-    """The one shared context. Never a second one, never a second loop."""
-    return get_context()
+TABLE_HEADERS = ("col.id", "col.file", "col.type", "col.size",
+                 "col.state", "col.progress", "col.attempts")
+MEDIA_TYPES = ("photo", "video", "audio", "voice", "document", "animation", "sticker")
+CONCURRENCY_CHOICES = ("safe", "balanced", "fast")
+SCOPE_CHOICES = ("auto", "message", "chat")
 
 
-def _lang(): return CONFIG.language
+def _headers() -> list[str]:
+    return [t(key) for key in TABLE_HEADERS]
 
-
-def _tel_status():
-    return t("status.connected") if _ctx().auth.state.telegram_authorized else t("status.disconnected")
-
-
-def _drv_status():
-    return t("status.connected") if _ctx().auth.state.drive_authorized else t("status.disconnected")
-
-
-# ---- Telegram handlers ----
-
-def ui_connect_telegram(api_id: str, api_hash: str):
-    try:
-        ctx = _ctx()
-        svc = TelegramService(int(api_id), api_hash.strip())
-        ctx.aio.run(svc.connect())
-        ctx.auth.set_telegram(svc)
-        return f"{t('nav.telegram')}: {_tel_status()}", _tel_status()
-    except Exception as e:
-        return f"{t('err.unknown')}: {e}", _tel_status()
-
-
-def ui_send_code(phone: str):
-    ctx = _ctx()
-    if not ctx.auth.telegram:
-        return t("err.reauth")
-    try:
-        ctx.aio.run(ctx.auth.telegram.start_login(phone.strip()))
-        return t("btn.send_code") + " ✓"
-    except Exception as e:
-        return f"{t('err.unknown')}: {e}"
-
-
-def ui_verify_code(phone: str, code: str, password: str):
-    ctx = _ctx()
-    if not ctx.auth.telegram:
-        return t("err.reauth"), _tel_status()
-    try:
-        ok = ctx.aio.run(
-            ctx.auth.telegram.complete_login(phone.strip(), code.strip(), password.strip() or None)
-        )
-        ctx.auth.state.telegram_authorized = ok
-        return (t("status.connected") if ok else t("status.disconnected")), _tel_status()
-    except Exception as e:
-        return f"{t('err.unknown')}: {e}", _tel_status()
-
-
-def ui_logout_telegram():
-    ctx = _ctx()
-    if ctx.auth.telegram:
-        try:
-            ctx.aio.run(ctx.auth.telegram.logout())
-        except Exception:
-            pass
-    ctx.auth.clear_telegram()
-    return _tel_status()
-
-
-# ---- Drive handlers ----
-
-def ui_drive_start(client_json_file):
-    if client_json_file is None:
-        return t("form.upload_client_json"), _drv_status(), ""
-    try:
-        path = client_json_file.name if hasattr(client_json_file, "name") else str(client_json_file)
-        svc = DriveService(client_secret_path=path)
-        if svc.try_authenticate_from_token():
-            _ctx().auth.set_drive(svc)
-            return t("status.connected"), _drv_status(), ""
-        url = svc.start_auth_flow()
-        _ctx().auth.drive = svc  # temp reference for code completion
-        return t("form.paste_oauth_code"), _drv_status(), url
-    except Exception as e:
-        return f"{t('err.unknown')}: {e}", _drv_status(), ""
-
-
-def ui_drive_complete(oauth_code: str):
-    ctx = _ctx()
-    if not ctx.auth.drive:
-        return t("err.reauth"), _drv_status()
-    try:
-        ok = ctx.auth.drive.complete_auth_flow(oauth_code.strip())
-        if ok:
-            ctx.auth.set_drive(ctx.auth.drive)
-            return t("status.connected"), _drv_status()
-        return t("err.unknown"), _drv_status()
-    except Exception as e:
-        return f"{t('err.unknown')}: {e}", _drv_status()
-
-
-def ui_drive_logout():
-    _ctx().auth.clear_drive()
-    return _drv_status()
-
-
-# ---- Analyze + queue ----
-
-def ui_analyze(link: str):
-    if not _ctx().auth.telegram or not _ctx().auth.state.telegram_authorized:
-        return t("err.reauth"), []
-    try:
-        ctx = _ctx()
-        parsed = parse_link(link.strip())
-        items = ctx.aio.run(scan_link(ctx.auth.telegram, parsed))
-        rows = [
-            [it.safe_name, it.media_type, human_bytes(it.size_bytes), it.state, "0%", it.attempts]
-            for it in items
-        ]
-        # persist as Pending
-        ctx.queue_manager.bulk_enqueue(items)
-        return f"{len(items)} items", rows
-    except Exception as e:
-        return f"{t('err.unknown')}: {e}", []
-
-
-def ui_queue_rows():
-    items = db.list_items(limit=500)
-    return [
-        [it.safe_name, it.media_type, human_bytes(it.size_bytes),
-         t(f"state.{it.state}"),
-         f"{max(it.download_pct, it.upload_pct):.0f}%", it.attempts]
-        for it in items
-    ]
-
-
-def ui_dashboard():
-    ctx = _ctx()
-    snap = ctx.progress.snapshot()
-    quota_line = "—"
-    try:
-        if ctx.auth.drive:
-            q = ctx.auth.drive.storage_quota()
-            quota_line = f"{human_bytes(q['usage'])} / {human_bytes(q['limit'])}"
-    except Exception:
-        pass
-    disk_free = human_bytes(safe_disk_free(TEMP_DIR))
-    current = ""
-    if snap["active"]:
-        a = snap["active"][0]
-        current = f"{a['name']} — {a['phase']} {max(a['pct_download'], a['pct_upload']):.0f}%"
-    return {
-        t("dash.current"): current,
-        t("dash.done"): snap["done_files"],
-        t("dash.failed"): snap["failed_files"],
-        t("dash.remaining"): max(0, snap["total_files"] - snap["done_files"] - snap["failed_files"]),
-        t("dash.speed"): human_bytes(snap["instant_speed"]) + "/s",
-        t("dash.avg_speed"): human_bytes(snap["average_speed"]) + "/s",
-        t("dash.eta"): human_duration(snap["eta_seconds"]),
-        t("dash.overall_pct"): f"{(snap['done_bytes'] / snap['total_bytes'] * 100) if snap['total_bytes'] else 0:.1f}%",
-        t("dash.telegram_status"): _tel_status(),
-        t("dash.drive_status"): _drv_status(),
-        t("dash.drive_space"): quota_line,
-        t("dash.colab_space"): disk_free,
-    }
-
-
-# ---- Transfer control ----
-
-def _ensure_drive_folder() -> str:
-    ctx = _ctx()
-    assert ctx.auth.drive
-    if CONFIG.drive_folder_id:
-        return CONFIG.drive_folder_id
-    fid = ctx.auth.drive.ensure_folder("TeleDrive_Transfers")
-    CONFIG.drive_folder_id = fid
-    return fid
-
-
-def ui_start_transfer():
-    ctx = _ctx()
-    if not (ctx.auth.state.telegram_authorized and ctx.auth.state.drive_authorized):
-        return t("err.reauth")
-    running = ctx.ui_state.extra.get("transfer_future")
-    if running is not None and not running.done():
-        return t("status.running")
-    folder = _ensure_drive_folder()
-    ctx.transfer_manager = TransferManager(ctx.auth.telegram, ctx.auth.drive, folder)
-    # Runs on the one shared loop — no thread, no second loop.
-    ctx.ui_state.extra["transfer_future"] = ctx.aio.submit(ctx.transfer_manager.run())
-    return t("status.running")
-
-
-def ui_pause():
-    mgr = _ctx().transfer_manager
-    if mgr: mgr.pause()
-    return t("status.paused")
-
-
-def ui_resume():
-    mgr = _ctx().transfer_manager
-    if mgr: mgr.resume()
-    return t("status.running")
-
-
-def ui_stop():
-    mgr = _ctx().transfer_manager
-    if mgr: mgr.stop()
-    return t("status.stopped")
-
-
-def ui_recover():
-    ctx = _ctx()
-    if not ctx.auth.drive:
-        return t("msg.recovery_none")
-    snap = restore_from_drive(ctx.auth.drive)
-    if not snap:
-        return t("msg.recovery_none")
-    n = apply_snapshot(snap)
-    r = reconcile_with_drive(ctx.auth.drive)
-    return f"{t('msg.recovery_ok')} imported={n} reconciled={r}"
-
-
-def ui_logs():
-    return tail(lines=300)
-
-
-def ui_toggle_lang():
-    new = toggle()
-    return new
-
-
-# ---- Build the app ----
 
 def build(ctx: ApplicationContext | None = None) -> Any:
-    """Build the Gradio app against the single shared context."""
+    """Build the Gradio app and fail the build if any control is unwired."""
     if ctx is None:
         ctx = get_context()
     if gr is None:
         raise RuntimeError("gradio is not installed")
+    binder = ctx.binder
 
-    with gr.Blocks(title="TeleDrive", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title=t("app.title"), theme=gr.themes.Soft()) as demo:
         gr.Markdown(f"# {t('app.title')}\n{t('app.subtitle')}")
-        lang_btn = gr.Button(t("btn.language"))
-        lang_state = gr.Textbox(value=_lang(), visible=False)
 
-        with gr.Tab(t("nav.telegram")):
-            api_id = gr.Textbox(label=t("form.api_id"), type="password")
-            api_hash = gr.Textbox(label=t("form.api_hash"), type="password")
-            connect_btn = gr.Button(t("btn.connect_telegram"))
-            tel_status = gr.Textbox(label=t("dash.telegram_status"), value=_tel_status(), interactive=False)
-            connect_out = gr.Textbox(label="")
-            connect_btn.click(ui_connect_telegram, [api_id, api_hash], [connect_out, tel_status])
+        with gr.Row():
+            language_btn = gr.Button(t("btn.language"))
+            language_box = gr.Textbox(label=t("btn.language"),
+                                      value=ctx.ui_state.language, interactive=False)
+            theme_radio = gr.Radio(["light", "dark"], value="light", label=t("btn.theme"))
+            theme_box = gr.Textbox(label=t("btn.theme"), interactive=False)
 
-            phone = gr.Textbox(label=t("form.phone"))
-            send_code_btn = gr.Button(t("btn.send_code"))
-            code = gr.Textbox(label=t("form.code"))
-            password = gr.Textbox(label=t("form.password"), type="password")
-            verify_btn = gr.Button(t("btn.verify"))
-            code_out = gr.Textbox(label="")
-            send_code_btn.click(ui_send_code, [phone], [code_out])
-            verify_btn.click(ui_verify_code, [phone, code, password], [code_out, tel_status])
+        # ---------------- Connection Center ----------------
+        with gr.Tab(t("nav.connection")):
+            with gr.Group():
+                gr.Markdown(f"### {t('nav.telegram')}")
+                api_id = gr.Textbox(label=t("form.api_id"), type="password")
+                api_hash = gr.Textbox(label=t("form.api_hash"), type="password")
+                credentials_btn = gr.Button(t("btn.connect_telegram"))
+                phone = gr.Textbox(label=t("form.phone"))
+                with gr.Row():
+                    send_code_btn = gr.Button(t("btn.send_code"))
+                    resend_code_btn = gr.Button(t("btn.resend_code"))
+                code = gr.Textbox(label=t("form.code"))
+                verify_btn = gr.Button(t("btn.verify"))
+                password = gr.Textbox(label=t("form.password"), type="password")
+                verify_password_btn = gr.Button(t("btn.verify_password"))
+                with gr.Row():
+                    telegram_logout_btn = gr.Button(t("btn.logout"))
+                    telegram_status_btn = gr.Button(t("btn.refresh"))
+                telegram_detail = gr.Textbox(label=t("dash.telegram_status"), interactive=False)
+                telegram_chip = gr.Textbox(label=t("nav.telegram"), interactive=False)
 
-            logout_btn = gr.Button(t("btn.logout"))
-            logout_btn.click(ui_logout_telegram, None, [tel_status])
+            with gr.Group():
+                gr.Markdown(f"### {t('nav.drive')}")
+                with gr.Row():
+                    drive_connect_btn = gr.Button(t("btn.link_drive"))
+                    drive_reconnect_btn = gr.Button(t("btn.drive_reconnect"))
+                    drive_status_btn = gr.Button(t("btn.refresh"))
+                drive_detail = gr.Textbox(label=t("dash.drive_status"), interactive=False)
+                drive_chip = gr.Textbox(label=t("nav.drive"), interactive=False)
+                parent_id = gr.Textbox(label=t("form.parent_folder"), value="root")
+                list_folders_btn = gr.Button(t("btn.drive_list_folders"))
+                folder_choice = gr.Dropdown(choices=[], label=t("form.folder"),
+                                            allow_custom_value=True)
+                new_folder_name = gr.Textbox(label=t("form.new_folder"))
+                create_folder_btn = gr.Button(t("btn.drive_create_folder"))
+                created_folder = gr.Textbox(label=t("form.folder"), interactive=False)
+                select_folder_btn = gr.Button(t("btn.drive_select_folder"))
+                selected_folder = gr.Textbox(label=t("form.selected_folder"), interactive=False)
+                folder_message = gr.Textbox(label=t("nav.drive"), interactive=False)
+                quota_btn = gr.Button(t("btn.refresh_quota"))
+                quota_line = gr.Textbox(label=t("dash.drive_space"), interactive=False)
+                quota_json = gr.JSON(label=t("dash.drive_space"))
 
-        with gr.Tab(t("nav.drive")):
-            client_file = gr.File(label=t("form.upload_client_json"), file_types=[".json"])
-            drv_start = gr.Button(t("btn.link_drive"))
-            drv_status_box = gr.Textbox(label=t("dash.drive_status"), value=_drv_status(), interactive=False)
-            drv_url = gr.Textbox(label="OAuth URL", interactive=False)
-            oauth_code = gr.Textbox(label=t("form.paste_oauth_code"))
-            drv_complete = gr.Button(t("btn.verify"))
-            drv_msg = gr.Textbox(label="")
-            drv_start.click(ui_drive_start, [client_file], [drv_msg, drv_status_box, drv_url])
-            drv_complete.click(ui_drive_complete, [oauth_code], [drv_msg, drv_status_box])
-            drv_logout = gr.Button(t("btn.logout"))
-            drv_logout.click(ui_drive_logout, None, [drv_status_box])
-
+        # ---------------- Analyze ----------------
         with gr.Tab(t("nav.link")):
             link = gr.Textbox(label=t("form.link"))
+            scope = gr.Radio(list(SCOPE_CHOICES), value="auto", label=t("form.scope"))
             analyze_btn = gr.Button(t("btn.analyze"))
-            analyze_msg = gr.Textbox(label="")
-            files_table = gr.Dataframe(
-                headers=[t("col.file"), t("col.type"), t("col.size"),
-                         t("col.state"), t("col.progress"), t("col.attempts")],
-                interactive=False,
-            )
-            analyze_btn.click(ui_analyze, [link], [analyze_msg, files_table])
+            analyze_message = gr.Textbox(label=t("nav.link"), interactive=False)
+            candidates_table = gr.Dataframe(headers=_headers(), interactive=False)
+            with gr.Accordion(t("form.filters"), open=False):
+                media_types = gr.CheckboxGroup(list(MEDIA_TYPES), label=t("col.type"))
+                extensions = gr.Textbox(label=t("form.extensions"))
+                min_size = gr.Number(label=t("form.min_size_mb"), value=None)
+                max_size = gr.Number(label=t("form.max_size_mb"), value=None)
+                date_from = gr.Textbox(label=t("form.date_from"))
+                date_to = gr.Textbox(label=t("form.date_to"))
+                include = gr.Textbox(label=t("form.include"))
+                exclude = gr.Textbox(label=t("form.exclude"))
+                filters_btn = gr.Button(t("btn.apply_filters"))
+            with gr.Row():
+                select_all_btn = gr.Button(t("btn.select_all"))
+                clear_selection_btn = gr.Button(t("btn.clear_selection"))
+                enqueue_btn = gr.Button(t("btn.enqueue_selected"))
 
+        # ---------------- Transfers ----------------
         with gr.Tab(t("nav.queue")):
-            refresh_q = gr.Button(t("btn.refresh"))
-            queue_table = gr.Dataframe(
-                headers=[t("col.file"), t("col.type"), t("col.size"),
-                         t("col.state"), t("col.progress"), t("col.attempts")],
-                interactive=False,
-            )
-            refresh_q.click(ui_queue_rows, None, [queue_table])
+            with gr.Row():
+                start_btn = gr.Button(t("btn.start"))
+                pause_btn = gr.Button(t("btn.pause"))
+                resume_btn = gr.Button(t("btn.resume"))
+                stop_btn = gr.Button(t("btn.stop"))
+            with gr.Row():
+                retry_failed_btn = gr.Button(t("btn.retry_failed"))
+                clear_completed_btn = gr.Button(t("btn.clear_completed"))
+                refresh_queue_btn = gr.Button(t("btn.refresh"))
+            queue_status = gr.Textbox(label=t("dash.queue_status"), interactive=False)
+            queue_table = gr.Dataframe(headers=_headers(), interactive=False)
+            item_id = gr.Textbox(label=t("col.id"))
+            with gr.Row():
+                pause_item_btn = gr.Button(t("btn.pause_item"))
+                resume_item_btn = gr.Button(t("btn.resume_item"))
+                stop_item_btn = gr.Button(t("btn.stop_item"))
+                retry_item_btn = gr.Button(t("btn.retry_item"))
 
-        with gr.Tab(t("nav.settings")):
-            conc = gr.Radio(["safe", "balanced", "fast"], value=CONFIG.concurrency,
-                            label=t("nav.settings"))
-
-            def set_conc(v):
-                CONFIG.concurrency = v
-                CONFIG.manual_concurrency = None
-                return v
-
-            conc.change(set_conc, [conc], [conc])
-            start_btn = gr.Button(t("btn.start"))
-            pause_btn = gr.Button(t("btn.pause"))
-            resume_btn = gr.Button(t("btn.resume"))
-            stop_btn = gr.Button(t("btn.stop"))
-            recover_btn = gr.Button(t("msg.recovery_ok"))
-            transfer_status = gr.Textbox(label=t("dash.queue_status"), interactive=False)
-            start_btn.click(ui_start_transfer, None, [transfer_status])
-            pause_btn.click(ui_pause, None, [transfer_status])
-            resume_btn.click(ui_resume, None, [transfer_status])
-            stop_btn.click(ui_stop, None, [transfer_status])
-            recover_btn.click(ui_recover, None, [transfer_status])
-
+        # ---------------- Dashboard ----------------
         with gr.Tab(t("nav.dashboard")):
-            dash = gr.JSON(label=t("nav.dashboard"))
-            dash_refresh = gr.Button(t("btn.refresh"))
-            dash_refresh.click(ui_dashboard, None, [dash])
+            dashboard_btn = gr.Button(t("btn.refresh"))
+            dashboard_json = gr.JSON(label=t("nav.dashboard"))
 
+        # ---------------- Logs ----------------
         with gr.Tab(t("nav.logs")):
-            logs_out = gr.Textbox(label=t("nav.logs"), lines=20)
-            logs_refresh = gr.Button(t("btn.refresh"))
-            logs_refresh.click(ui_logs, None, [logs_out])
+            logs_refresh_btn = gr.Button(t("btn.refresh"))
+            logs_query = gr.Textbox(label=t("btn.search_logs"))
+            logs_search_btn = gr.Button(t("btn.search_logs"))
+            logs_box = gr.Textbox(label=t("nav.logs"), lines=20, interactive=False)
+            logs_download_btn = gr.Button(t("btn.download_logs"))
+            logs_file = gr.File(label=t("btn.download_logs"))
 
-        lang_btn.click(ui_toggle_lang, None, [lang_state])
+        # ---------------- Settings ----------------
+        with gr.Tab(t("nav.settings")):
+            concurrency = gr.Radio(list(CONCURRENCY_CHOICES),
+                                   value=ctx.config.concurrency, label=t("form.concurrency"))
+            concurrency_box = gr.Textbox(label=t("form.concurrency"), interactive=False)
+            recover_btn = gr.Button(t("btn.recover"))
+            checkpoint_btn = gr.Button(t("btn.checkpoint"))
+            maintenance_box = gr.Textbox(label=t("nav.settings"), interactive=False)
+
+        # ---------------- Export ----------------
+        with gr.Tab(t("nav.export")):
+            build_zip_btn = gr.Button(t("btn.build_zip"))
+            zip_message = gr.Textbox(label=t("nav.export"), interactive=False)
+            zip_file = gr.File(label=t("btn.build_zip"))
+            colab_cells_btn = gr.Button(t("btn.colab_cells"))
+            colab_cells_box = gr.Textbox(label=t("btn.colab_cells"), lines=20, interactive=False)
+
+        # ---------------- Bindings ----------------
+        telegram_outputs = [telegram_detail, telegram_chip]
+        drive_outputs = [drive_detail, drive_chip]
+        analyze_outputs = [analyze_message, candidates_table]
+        queue_outputs = [queue_status, queue_table]
+
+        binder.wire(credentials_btn, "telegram.set_credentials", [api_id, api_hash], telegram_outputs)
+        binder.wire(send_code_btn, "telegram.send_code", [phone], telegram_outputs)
+        binder.wire(resend_code_btn, "telegram.resend_code", [], telegram_outputs)
+        binder.wire(verify_btn, "telegram.verify_code", [code], telegram_outputs)
+        binder.wire(verify_password_btn, "telegram.verify_password", [password], telegram_outputs)
+        binder.wire(telegram_logout_btn, "telegram.logout", [], telegram_outputs)
+        binder.wire(telegram_status_btn, "telegram.status", [], telegram_outputs)
+
+        binder.wire(drive_connect_btn, "drive.connect", [], drive_outputs)
+        binder.wire(drive_reconnect_btn, "drive.reconnect", [], drive_outputs)
+        binder.wire(drive_status_btn, "drive.status", [], drive_outputs)
+        binder.wire(list_folders_btn, "drive.list_folders", [parent_id],
+                    [folder_message, folder_choice])
+        binder.wire(create_folder_btn, "drive.create_folder", [new_folder_name, parent_id],
+                    [folder_message, created_folder])
+        binder.wire(select_folder_btn, "drive.select_folder", [folder_choice],
+                    [folder_message, selected_folder])
+        binder.wire(quota_btn, "drive.refresh_quota", [], [quota_line, quota_json])
+
+        binder.wire(analyze_btn, "analyze.run", [link, scope], analyze_outputs)
+        binder.wire(
+            filters_btn, "analyze.apply_filters",
+            [media_types, extensions, min_size, max_size, date_from, date_to, include, exclude],
+            analyze_outputs,
+        )
+        binder.wire(select_all_btn, "analyze.select_all", [], analyze_outputs)
+        binder.wire(clear_selection_btn, "analyze.clear_selection", [], analyze_outputs)
+        binder.wire(enqueue_btn, "analyze.enqueue_selected", [], analyze_outputs)
+
+        binder.wire(start_btn, "queue.start_selected", [], queue_outputs)
+        binder.wire(pause_btn, "queue.pause", [], queue_outputs)
+        binder.wire(resume_btn, "queue.resume", [], queue_outputs)
+        binder.wire(stop_btn, "queue.stop", [], queue_outputs)
+        binder.wire(retry_failed_btn, "queue.retry_failed", [], queue_outputs)
+        binder.wire(clear_completed_btn, "queue.clear_completed", [], queue_outputs)
+        binder.wire(refresh_queue_btn, "queue.refresh", [], queue_outputs)
+        binder.wire(pause_item_btn, "queue.pause_item", [item_id], queue_outputs)
+        binder.wire(resume_item_btn, "queue.resume_item", [item_id], queue_outputs)
+        binder.wire(stop_item_btn, "queue.stop_item", [item_id], queue_outputs)
+        binder.wire(retry_item_btn, "queue.retry_item", [item_id], queue_outputs)
+
+        binder.wire(dashboard_btn, "dashboard.refresh", [], [dashboard_json])
+
+        binder.wire(logs_refresh_btn, "logs.refresh", [], [logs_box])
+        binder.wire(logs_search_btn, "logs.search", [logs_query], [logs_box])
+        binder.wire(logs_download_btn, "logs.download", [], [logs_file])
+
+        binder.wire(concurrency, "settings.set_concurrency", [concurrency], [concurrency_box],
+                    event="change")
+        binder.wire(language_btn, "settings.toggle_language", [], [language_box])
+        binder.wire(theme_radio, "settings.set_theme", [theme_radio], [theme_box], event="change")
+
+        binder.wire(recover_btn, "recovery.restore", [], [maintenance_box])
+        binder.wire(checkpoint_btn, "maintenance.checkpoint", [], [maintenance_box])
+
+        binder.wire(build_zip_btn, "export.build_zip", [], [zip_message, zip_file])
+        binder.wire(colab_cells_btn, "export.colab_cells", [], [colab_cells_box])
+
+        # Fails the build when any ready action was never attached to a control.
+        binder.assert_complete()
 
     return demo
