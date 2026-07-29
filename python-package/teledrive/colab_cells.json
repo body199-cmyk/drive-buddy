@@ -1,0 +1,33 @@
+{
+  "version": "3.1.0",
+  "cells": [
+    {
+      "title": "Install pinned dependencies",
+      "code": "# Cell 1 — dependencies (pinned, no surprises)\n!pip -q install --upgrade pip\n!pip -q install \"telethon==1.44.0\" \"gradio==6.20.0\" \\\n  \"google-api-python-client==2.190.0\" \"google-auth==2.42.1\" \"nest_asyncio==1.6.0\"\nprint(\"dependencies installed\")\n"
+    },
+    {
+      "title": "Get the TeleDrive package",
+      "code": "# Cell 2 — fetch and unpack the package next to this notebook\nimport os, zipfile, urllib.request, pathlib\n\nPACKAGE_ZIP = \"/content/teledrive_v3.1.zip\"   # upload the ZIP, or set PACKAGE_URL\nPACKAGE_URL = \"\"                              # optional direct download URL\n\nif PACKAGE_URL:\n    urllib.request.urlretrieve(PACKAGE_URL, PACKAGE_ZIP)\nassert os.path.exists(PACKAGE_ZIP), \"upload teledrive_v3.1.zip to /content first\"\n\nwith zipfile.ZipFile(PACKAGE_ZIP) as zf:\n    zf.extractall(\"/content\")\n\nroot = next(p for p in pathlib.Path(\"/content\").glob(\"teledrive-v3.1*\") if p.is_dir())\nos.chdir(root)\nprint(\"package root:\", root)\n"
+    },
+    {
+      "title": "Authorize Google Drive (native Colab)",
+      "code": "# Cell 3 — native Colab Drive authorization; no client_secret.json, no pasted codes\nfrom google.colab import auth as colab_auth\nimport google.auth\nfrom googleapiclient.discovery import build\n\ncolab_auth.authenticate_user()\ncreds, _ = google.auth.default(scopes=[\"https://www.googleapis.com/auth/drive\"])\nabout = build(\"drive\", \"v3\", credentials=creds, cache_discovery=False) \\\n    .about().get(fields=\"user(emailAddress),storageQuota(limit,usage)\").execute()\nprint(\"drive account:\", about[\"user\"][\"emailAddress\"])\n"
+    },
+    {
+      "title": "Bootstrap the runtime",
+      "code": "# Cell 4 — create runtime directories, apply migrations, verify the environment\nimport sys\nsys.path.insert(0, \".\")\nfrom teledrive.bootstrap import bootstrap\n\nctx = bootstrap()\nprint(\"context ready:\", ctx.bootstrap_info)\n"
+    },
+    {
+      "title": "Run the self-test",
+      "code": "# Cell 5 — run the packaged test suite before touching real data\n!python -m pytest -q tests\n"
+    },
+    {
+      "title": "Launch the interface",
+      "code": "# Cell 6 — launch the Gradio interface and print the public link\nfrom teledrive.app import launch\n\ndemo = launch(share=True)\n"
+    },
+    {
+      "title": "Build the tested ZIP",
+      "code": "# Cell 7 — rebuild a tested archive and download it\nfrom teledrive.package_service import PackageService\nfrom google.colab import files\n\nresult = PackageService().build_tested_archive()\nprint(result.summary.splitlines()[0])\nfiles.download(result.zip_path)\n"
+    }
+  ]
+}
