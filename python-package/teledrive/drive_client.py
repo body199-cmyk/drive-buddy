@@ -1,104 +1,44 @@
-"""Google Drive v3 client with OAuth Desktop + resumable upload + appProperties."""
+"""Google Drive v3 file operations.
+
+Authentication is NOT performed here. Constitution Section 6 allows exactly one
+Drive credential path (native Colab auth in `drive_auth.py`); this module is a
+thin, injected wrapper around the resulting `drive` API service object.
+"""
 from __future__ import annotations
 
 import io
-import json
 import os
-from pathlib import Path
 from typing import Any, Callable, Optional
 
-from .config import DRIVE_APPDATA_FOLDER, DRIVE_TOKEN, UPLOAD_CHUNK
+from .config import UPLOAD_CHUNK
 from .logging_config import get_logger
 
 _log = get_logger("teledrive.drive")
 
 try:
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
     from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
     _GDRIVE_AVAILABLE = True
 except Exception:  # pragma: no cover
     _GDRIVE_AVAILABLE = False
-    Credentials = None  # type: ignore
+    MediaFileUpload = None  # type: ignore
+    MediaIoBaseDownload = None  # type: ignore
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
 class DriveService:
-    def __init__(self, client_secret_path: str, token_path: str = str(DRIVE_TOKEN)):
-        if not _GDRIVE_AVAILABLE:
-            raise RuntimeError("google client libraries are not installed")
-        self.client_secret_path = client_secret_path
-        self.token_path = token_path
-        self.creds: Optional[Credentials] = None
-        self.service = None
+    """Wraps an already-authenticated Drive API service object."""
 
-    # ---------- Auth ----------
+    def __init__(self, service: Any):
+        if service is None:
+            raise RuntimeError("DriveService requires an authenticated drive service")
+        self.service = service
 
-    def _load_creds(self) -> Optional[Credentials]:
-        if os.path.exists(self.token_path):
-            try:
-                return Credentials.from_authorized_user_file(self.token_path, SCOPES)
-            except Exception:
-                return None
-        return None
-
-    def _save_creds(self, creds: Credentials) -> None:
-        Path(self.token_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(self.token_path, "w") as f:
-            f.write(creds.to_json())
-        try:
-            os.chmod(self.token_path, 0o600)
-        except Exception:
-            pass
-
-    def start_auth_flow(self) -> str:
-        """Return an auth URL for the user to open. Uses out-of-band flow for Colab."""
-        flow = InstalledAppFlow.from_client_secrets_file(self.client_secret_path, SCOPES)
-        flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
-        auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
-        self._pending_flow = flow
-        return auth_url
-
-    def complete_auth_flow(self, code: str) -> bool:
-        flow = getattr(self, "_pending_flow", None)
-        if flow is None:
-            return False
-        flow.fetch_token(code=code)
-        self.creds = flow.credentials
-        self._save_creds(self.creds)
-        self._build_service()
-        return True
-
-    def try_authenticate_from_token(self) -> bool:
-        creds = self._load_creds()
-        if creds and creds.valid:
-            self.creds = creds
-            self._build_service()
-            return True
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                self.creds = creds
-                self._save_creds(creds)
-                self._build_service()
-                return True
-            except Exception as e:
-                _log.warning("token refresh failed: %s", e)
-        return False
-
-    def _build_service(self) -> None:
-        self.service = build("drive", "v3", credentials=self.creds, cache_discovery=False)
+    @classmethod
+    def from_auth(cls, drive_auth) -> "DriveService":
+        return cls(drive_auth.require_service())
 
     def revoke(self) -> None:
-        try:
-            if os.path.exists(self.token_path):
-                os.remove(self.token_path)
-        except Exception:
-            pass
-        self.creds = None
         self.service = None
 
     # ---------- Metadata ----------
