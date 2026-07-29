@@ -1,18 +1,20 @@
-"""Entry point: launches the Gradio UI. Colab-friendly inline launch."""
+"""Entry point: launches the Gradio UI on the single ApplicationContext."""
 from __future__ import annotations
 
 from . import bootstrap
-from .config import CONFIG
+from .app_context import ApplicationContext
 from .logging_config import get_logger
 from .ui import build
 
 _log = get_logger("teledrive.app")
 
 
-def launch(share: bool = False, inline: bool = True) -> None:
-    bootstrap.run()
+def launch(share: bool = False, inline: bool = True) -> ApplicationContext:
+    ctx = bootstrap.run()
     if share:
         from .i18n import t
+
         _log.warning(t("msg.share_warning"))
-    demo = build()
+    demo = build(ctx)
     demo.launch(share=share, inline=inline, quiet=True)
+    return ctx
