@@ -76,6 +76,7 @@
   "err.code_invalid": "الرمز غير صحيح",
   "err.cooldown": "يرجى الانتظار قبل طلب رمز جديد",
   "err.dead_control": "عنصر التحكم غير جاهز",
+  "err.disk_full": "لا توجد مساحة كافية على القرص المحلي",
   "err.drive_auth_failed": "فشل تفويض جوجل درايف",
   "err.drive_full": "لا توجد مساحة كافية في درايف.",
   "err.drive_not_ready": "لم يتم ربط جوجل درايف",

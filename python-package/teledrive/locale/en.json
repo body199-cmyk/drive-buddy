@@ -76,6 +76,7 @@
   "err.code_invalid": "The code is incorrect",
   "err.cooldown": "Please wait before requesting a new code",
   "err.dead_control": "Control is not ready",
+  "err.disk_full": "Not enough local disk space",
   "err.drive_auth_failed": "Google Drive authorization failed",
   "err.drive_full": "Drive has insufficient storage.",
   "err.drive_not_ready": "Google Drive is not connected",
