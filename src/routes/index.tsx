@@ -68,9 +68,8 @@ function Index() {
             TeleDrive v2 — ناقل تيليجرام إلى Google Drive
           </h1>
           <p className="mt-3 text-muted-foreground leading-relaxed">
-            حزمة بايثون كاملة (Telethon + Google Drive API + Gradio) تعمل داخل Google
-            Colab. الفرونت-اند دي مجرد صفحة تحميل — التطبيق الحقيقي هو الحزمة اللي
-            هتشغّلها في Colab.
+            حزمة بايثون كاملة (Telethon + Google Drive API + Gradio) تعمل داخل Google Colab.
+            الفرونت-اند دي مجرد صفحة تحميل — التطبيق الحقيقي هو الحزمة اللي هتشغّلها في Colab.
           </p>
         </header>
 
@@ -98,13 +97,39 @@ function Index() {
           <h2 className="mb-4 text-lg font-semibold">2) شغّلها في Colab</h2>
           <ol className="list-decimal space-y-2 pr-6 text-sm leading-relaxed">
             <li>
-              افتح <a className="text-primary underline" href="https://colab.research.google.com" target="_blank" rel="noreferrer">colab.research.google.com</a> ثم File → Upload notebook وارفع <code className="rounded bg-muted px-1">TeleDrive.ipynb</code>.
+              افتح{" "}
+              <a
+                className="text-primary underline"
+                href="https://colab.research.google.com"
+                target="_blank"
+                rel="noreferrer"
+              >
+                colab.research.google.com
+              </a>{" "}
+              ثم File → Upload notebook وارفع{" "}
+              <code className="rounded bg-muted px-1">TeleDrive.ipynb</code>.
             </li>
-            <li>الخلية 1: ارفع الملف <code className="rounded bg-muted px-1">teledrive-package.zip</code> لما تُطلَب منك.</li>
-            <li>الخلية 2: <code className="rounded bg-muted px-1">bootstrap.run()</code> ينشئ المجلدات وقاعدة البيانات.</li>
-            <li>الخلية 3: أدخل <code className="rounded bg-muted px-1">api_id</code> و <code className="rounded bg-muted px-1">api_hash</code> عبر <code className="rounded bg-muted px-1">getpass</code>.</li>
-            <li>الخلية 4: <code className="rounded bg-muted px-1">app.launch()</code> يفتح واجهة Gradio.</li>
-            <li>في الواجهة: سجّل دخول تيليجرام، ارفع OAuth JSON لـ Drive، الصق رابطاً، Analyze → Start.</li>
+            <li>
+              الخلية 1: ارفع الملف{" "}
+              <code className="rounded bg-muted px-1">teledrive-package.zip</code> لما تُطلَب منك.
+            </li>
+            <li>
+              الخلية 2: <code className="rounded bg-muted px-1">bootstrap.run()</code> ينشئ المجلدات
+              وقاعدة البيانات.
+            </li>
+            <li>
+              الخلية 3: أدخل <code className="rounded bg-muted px-1">api_id</code> و{" "}
+              <code className="rounded bg-muted px-1">api_hash</code> عبر{" "}
+              <code className="rounded bg-muted px-1">getpass</code>.
+            </li>
+            <li>
+              الخلية 4: <code className="rounded bg-muted px-1">app.launch()</code> يفتح واجهة
+              Gradio.
+            </li>
+            <li>
+              في الواجهة: سجّل دخول تيليجرام، ارفع OAuth JSON لـ Drive، الصق رابطاً، Analyze →
+              Start.
+            </li>
           </ol>
         </section>
 
@@ -124,17 +149,30 @@ function Index() {
         </section>
 
         <section className="mb-8 rounded-lg border border-border bg-card p-6">
-          <h2 className="mb-4 text-lg font-semibold">وظائف الباك-اند (كلها مربوطة بأزرار الواجهة)</h2>
+          <h2 className="mb-4 text-lg font-semibold">
+            وظائف الباك-اند (كلها مربوطة بأزرار الواجهة)
+          </h2>
           <ul className="list-disc space-y-1 pr-6 text-sm leading-relaxed">
             <li>تسجيل دخول تيليجرام حقيقي (Telethon + phone/code/2FA).</li>
             <li>OAuth حقيقي لـ Google Drive Desktop مع حفظ التوكن.</li>
-            <li>تحليل روابط: عامة، خاصة <code className="rounded bg-muted px-1">t.me/c/…</code>، دعوات، saved، ألبومات.</li>
+            <li>
+              تحليل روابط: عامة، خاصة <code className="rounded bg-muted px-1">t.me/c/…</code>،
+              دعوات، saved، ألبومات.
+            </li>
             <li>فلاتر: نوع/امتداد/حجم/تاريخ/نطاق IDs/include/exclude.</li>
-            <li>Queue + State Machine بـ 12 حالة وانتقالات صارمة (فقط QueueManager يعدّل الحالة).</li>
+            <li>
+              Queue + State Machine بـ 12 حالة وانتقالات صارمة (فقط QueueManager يعدّل الحالة).
+            </li>
             <li>Semaphore: Safe=1, Balanced=2, Fast=3, Manual≤4 — بدون تجاوز.</li>
             <li>Retry: 5 محاولات، exp x2، cap 60s، jitter، transient فقط. FloodWait يُحترم.</li>
-            <li>كشف التكرار عبر <code className="rounded bg-muted px-1">appProperties.source_key</code> + الحجم.</li>
-            <li>Checkpoints ذرية تُرفع إلى <code className="rounded bg-muted px-1">TeleDrive_AppData</code> على Drive.</li>
+            <li>
+              كشف التكرار عبر{" "}
+              <code className="rounded bg-muted px-1">appProperties.source_key</code> + الحجم.
+            </li>
+            <li>
+              Checkpoints ذرية تُرفع إلى{" "}
+              <code className="rounded bg-muted px-1">TeleDrive_AppData</code> على Drive.
+            </li>
             <li>Reconcile بعد إعادة تشغيل Colab: يتحقق من Drive قبل إعادة النقل.</li>
             <li>حذف temp فقط بعد التحقق من الرفع الناجح.</li>
             <li>i18n عربي/إنجليزي حي مع RTL، وسجلّات مع Redaction للأسرار.</li>
@@ -142,7 +180,8 @@ function Index() {
         </section>
 
         <footer className="text-xs text-muted-foreground">
-          v1.0.0 — Constitution spec v2.0. لا يُرسَل أي سرّ إلى هذا الموقع، كل شيء يبقى داخل حساباتك على Google و Telegram.
+          v1.0.0 — Constitution spec v2.0. لا يُرسَل أي سرّ إلى هذا الموقع، كل شيء يبقى داخل حساباتك
+          على Google و Telegram.
         </footer>
       </main>
     </div>
