@@ -49,5 +49,9 @@ def test_stopped_runtime_refuses_work():
     rt.start()
     assert rt.run(asyncio.sleep(0, result=7)) == 7
     rt.stop()
-    with pytest.raises(AsyncRuntimeError):
-        rt.run(asyncio.sleep(0))
+    orphan = asyncio.sleep(0)
+    try:
+        with pytest.raises(AsyncRuntimeError):
+            rt.run(orphan)
+    finally:
+        orphan.close()
